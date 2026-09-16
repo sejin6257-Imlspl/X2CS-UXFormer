@@ -1,0 +1,148 @@
+input_img_size: 256
+input_ct_res: 72
+num_seg_classes: 6
+
+model:
+  base_learning_rate: 1.0e-06
+  target: x2ct_nerf.models.zoom_aegan_multitask.INRAEZoomMultiTaskModel
+  params:
+    ckpt_path: null
+    image_key: ctslice
+    monitor: val/eval_loss
+    num_seg_classes: ${num_seg_classes}
+    lambda_rec: 1.0
+    lambda_seg: 1.0
+    seg_loss_config:
+      ce_weight: 1.0
+      dice_weight: 1.0
+      dice_ignore_bg: true
+
+    ddconfig:
+      z_channels: 575
+      resolution: 72
+      in_channels: 3
+      out_ch: 3
+      ch: 128
+      ch_mult: [1, 2, 4]
+      num_res_blocks: 2
+      attn_resolutions: [18]
+      dropout: 0.0
+
+    seg_decoder_params:
+      z_channels: 575
+      resolution: 72
+      in_channels: 3
+      out_ch: ${num_seg_classes}
+      ch: 128
+      ch_mult: [1, 2, 4]
+      num_res_blocks: 2
+      attn_resolutions: [18]
+      dropout: 0.0
+
+    metadata:
+      gt_key: cropped_ctslice
+      encoder_module: x2ct_nerf.modules.INREncoderZoomAxisInAlign.INREncoderZoomAxisInAlign
+      decoder_module: taming.modules.diffusionmodules.model.Decoder
+      weight_decay: 1.0e-04
+      encoder_params:
+        params:
+          ct_res: ${input_ct_res}
+          feature_res: 18
+          N_rand_recon: 16384
+          chunk: 1048576
+          no_grad_cond_encoder: false
+          cond_list: [PA, Lateral]
+          main_model_of_encoder:
+            network_module: x2ct_nerf.modules.inr.model.PerspectiveINRNet
+            params:
+              cfg:
+                fov: 60
+                N_cond: 2
+                cond_encoder_module: x2ct_nerf.modules.image_encoder.resnet.ResNetEncoder
+                nerf_module: x2ct_nerf.modules.nerf.model.DummyNeRF
+                cond_encoder_params:
+                  cfg:
+                    model_name: resnet101
+                    in_channels: 3
+                    latent_dim: 256
+                    encoder_freeze_layer: layer2
+                    swin_freeze_layer: freeze_all_swin
+                    feature_layer: layer2
+                    input_img_size: ${input_img_size}
+                    pretrained: imagenet
+                    weight_dir: ''
+                    use_fusion_backproj: False
+                    save_feature_every: 500        # 500번 forward마다 저장 (0이면 비활성)
+                    save_feature_dir: './feature_maps'
+                nerf_params:
+                  cfg:
+                    multires: 10
+                    output_color_ch: ${model.params.ddconfig.z_channels}
+                    netchunk: 262144
+      decoder_params: ${model.params.ddconfig}
+
+    lossconfig:
+      target: x2ct_nerf.modules.losses.vqperceptual.ReconPerceptualLoss
+      params:
+        pixelloss_weight: 1.0
+        perceptual_weight: 1.0
+
+
+data:
+  target: train.DataModuleFromConfig
+  params:
+    batch_size: 8
+    num_workers: 8
+    train:
+      target: x2ct_nerf.data.hosi.HosiTrain
+      params:
+        training_images_list_file: /data1/Last/dataset_list/hosi/train.txt
+        opt:
+          num_seg_classes: ${num_seg_classes}
+          xray_size: 256
+          ct_size: 72
+          input_type:
+            - ${model.params.image_key}
+            - PA
+            - Lateral
+          ct_augment_list: []
+          xray_augment_list: [normalization]
+          CT_MIN_MAX: [-1024.0, 3071.0]
+          XRAY_MIN_MAX: [0, 255]
+    validation:
+      target: x2ct_nerf.data.hosi.HosiTest
+      params:
+        test_images_list_file: /data1/Last/dataset_list/hosi/val.txt
+        opt:
+          num_seg_classes: ${num_seg_classes}
+          xray_size: 256
+          ct_size: 72
+          input_type:
+            - ${model.params.image_key}
+            - PA
+            - Lateral
+          ct_augment_list: []
+          xray_augment_list: [normalization]
+          CT_MIN_MAX: [-1024.0, 3071.0]
+          XRAY_MIN_MAX: [0, 255]
+    test:
+      target: x2ct_nerf.data.hosi.HosiTest
+      params:
+        test_images_list_file: /data1/Last/dataset_list/hosi/test.txt
+        opt:
+          num_seg_classes: ${num_seg_classes}
+          xray_size: 256
+          ct_size: 72
+          input_type:
+            - ${model.params.image_key}
+            - PA
+            - Lateral
+          ct_augment_list: []
+          xray_augment_list: [normalization]
+          CT_MIN_MAX: [-1024.0, 3071.0]
+          XRAY_MIN_MAX: [0, 255]
+
+lightning:
+  trainer:
+    gpus: "0"
+    max_epochs: 100
